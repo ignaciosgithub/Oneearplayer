@@ -64,9 +64,9 @@ class AudioPlayer(QObject):
                 audio_array = np.column_stack((audio_array, audio_array))
             
             sample_rate = 44100
-            samples_per_switch = int(sample_rate / self.switch_frequency)
+            samples_per_switch = max(1, int(sample_rate / self.switch_frequency))
             
-            crossfade_samples = min(samples_per_switch // 20, 100)
+            crossfade_samples = max(1, min(samples_per_switch // 20, 100))
             
             processed_audio = audio_array.copy().astype(np.float32)
             
@@ -80,19 +80,21 @@ class AudioPlayer(QObject):
                 if current_channel == 0:
                     processed_audio[i:end_idx, 1] = 0
                     
-                    if i > 0 and crossfade_samples > 0:
+                    if i > 0 and crossfade_samples > 0 and chunk_len > 0:
                         fade_end = min(i + crossfade_samples, end_idx)
-                        fade_len = fade_end - i
-                        fade_in = np.linspace(0, 1, fade_len)
-                        processed_audio[i:fade_end, 0] *= fade_in
+                        fade_len = max(1, fade_end - i)
+                        if fade_len > 1:
+                            fade_in = np.linspace(0, 1, fade_len)
+                            processed_audio[i:fade_end, 0] *= fade_in
                 else:
                     processed_audio[i:end_idx, 0] = 0
                     
-                    if i > 0 and crossfade_samples > 0:
+                    if i > 0 and crossfade_samples > 0 and chunk_len > 0:
                         fade_end = min(i + crossfade_samples, end_idx)
-                        fade_len = fade_end - i
-                        fade_in = np.linspace(0, 1, fade_len)
-                        processed_audio[i:fade_end, 1] *= fade_in
+                        fade_len = max(1, fade_end - i)
+                        if fade_len > 1:
+                            fade_in = np.linspace(0, 1, fade_len)
+                            processed_audio[i:fade_end, 1] *= fade_in
                 
                 current_channel = 1 - current_channel
             
@@ -101,6 +103,8 @@ class AudioPlayer(QObject):
             
         except Exception as e:
             print(f"Error processing audio: {e}")
+            import traceback
+            traceback.print_exc()
             self.processed_sound = self.original_sound
     
     def play(self):
