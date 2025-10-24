@@ -16,6 +16,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QFont
 import pygame
 import numpy as np
+import wave
+import struct
 
 
 class AudioPlayer(QObject):
@@ -25,71 +27,96 @@ class AudioPlayer(QObject):
     
     def __init__(self):
         super().__init__()
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
         self.current_file = None
         self.is_playing = False
         self.is_paused = False
         self.switch_frequency = 120
         self.duration = 0
         self.position = 0
-        self.switch_thread = None
-        self.stop_switching = False
-        self.current_channel = 0
-        self.sound = None
+        self.original_sound = None
+        self.processed_sound = None
         self.channel = None
         self.base_volume = 0.7
+        self.processing_thread = None
         
     def load_file(self, filepath):
         try:
             self.stop()
             self.current_file = filepath
             
-            self.sound = pygame.mixer.Sound(filepath)
-            self.duration = int(self.sound.get_length() * 1000)
+            self.original_sound = pygame.mixer.Sound(filepath)
+            self.duration = int(self.original_sound.get_length() * 1000)
             self.duration_changed.emit(self.duration)
+            
+            self.process_audio()
             
             return True
         except Exception as e:
             print(f"Error loading file: {e}")
             return False
     
-    def switch_channels_thread(self):
-        switch_interval = 1.0 / self.switch_frequency
-        
-        while not self.stop_switching and self.is_playing:
-            if not self.is_paused and self.channel:
-                self.current_channel = 1 - self.current_channel
-                
-                if self.current_channel == 0:
-                    self.channel.set_volume(self.base_volume, 0.0)
-                else:
-                    self.channel.set_volume(0.0, self.base_volume)
+    def process_audio(self):
+        try:
+            audio_array = pygame.sndarray.array(self.original_sound)
             
-            time.sleep(switch_interval)
+            if len(audio_array.shape) == 1:
+                audio_array = np.column_stack((audio_array, audio_array))
+            
+            sample_rate = 44100
+            samples_per_switch = int(sample_rate / self.switch_frequency)
+            
+            crossfade_samples = min(samples_per_switch // 20, 100)
+            
+            processed_audio = audio_array.copy().astype(np.float32)
+            
+            num_samples = len(processed_audio)
+            current_channel = 0
+            
+            for i in range(0, num_samples, samples_per_switch):
+                end_idx = min(i + samples_per_switch, num_samples)
+                chunk_len = end_idx - i
+                
+                if current_channel == 0:
+                    processed_audio[i:end_idx, 1] = 0
+                    
+                    if i > 0 and crossfade_samples > 0:
+                        fade_end = min(i + crossfade_samples, end_idx)
+                        fade_len = fade_end - i
+                        fade_in = np.linspace(0, 1, fade_len)
+                        processed_audio[i:fade_end, 0] *= fade_in
+                else:
+                    processed_audio[i:end_idx, 0] = 0
+                    
+                    if i > 0 and crossfade_samples > 0:
+                        fade_end = min(i + crossfade_samples, end_idx)
+                        fade_len = fade_end - i
+                        fade_in = np.linspace(0, 1, fade_len)
+                        processed_audio[i:fade_end, 1] *= fade_in
+                
+                current_channel = 1 - current_channel
+            
+            processed_audio = processed_audio.astype(np.int16)
+            self.processed_sound = pygame.sndarray.make_sound(processed_audio)
+            
+        except Exception as e:
+            print(f"Error processing audio: {e}")
+            self.processed_sound = self.original_sound
     
     def play(self):
-        if self.sound is None:
+        if self.processed_sound is None:
             return
         
         if self.is_paused and self.channel:
             self.channel.unpause()
             self.is_paused = False
             self.is_playing = True
-            
-            if not self.switch_thread or not self.switch_thread.is_alive():
-                self.stop_switching = False
-                self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
-                self.switch_thread.start()
         else:
-            self.channel = self.sound.play()
+            self.channel = self.processed_sound.play()
             if self.channel:
-                self.channel.set_volume(self.base_volume, 0.0)
+                self.channel.set_volume(self.base_volume)
                 self.is_playing = True
                 self.is_paused = False
-                
-                self.stop_switching = False
-                self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
-                self.switch_thread.start()
     
     def pause(self):
         if self.is_playing and not self.is_paused and self.channel:
@@ -97,10 +124,6 @@ class AudioPlayer(QObject):
             self.is_paused = True
     
     def stop(self):
-        self.stop_switching = True
-        if self.switch_thread:
-            self.switch_thread.join(timeout=1)
-        
         if self.channel:
             self.channel.stop()
         
@@ -110,15 +133,14 @@ class AudioPlayer(QObject):
         self.position_changed.emit(0)
     
     def set_position(self, position_ms):
-        if self.sound:
+        if self.processed_sound:
             was_playing = self.is_playing and not self.is_paused
             self.stop()
             
-            position_sec = position_ms / 1000.0
-            self.channel = self.sound.play(maxtime=int((self.duration - position_ms)))
+            self.channel = self.processed_sound.play(maxtime=int((self.duration - position_ms)))
             
             if self.channel:
-                self.channel.set_volume(self.base_volume, 0.0)
+                self.channel.set_volume(self.base_volume)
                 
                 if not was_playing:
                     self.channel.pause()
@@ -126,22 +148,22 @@ class AudioPlayer(QObject):
                 
                 self.is_playing = True
                 self.position = position_ms
-                
-                if was_playing:
-                    self.stop_switching = False
-                    self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
-                    self.switch_thread.start()
     
     def set_volume(self, volume):
         self.base_volume = volume / 100.0
         if self.channel and self.is_playing:
-            if self.current_channel == 0:
-                self.channel.set_volume(self.base_volume, 0.0)
-            else:
-                self.channel.set_volume(0.0, self.base_volume)
+            self.channel.set_volume(self.base_volume)
     
     def set_switch_frequency(self, frequency):
-        self.switch_frequency = frequency
+        if self.switch_frequency != frequency:
+            self.switch_frequency = frequency
+            if self.original_sound:
+                was_playing = self.is_playing
+                current_pos = self.position
+                self.stop()
+                self.process_audio()
+                if was_playing:
+                    self.play()
 
 
 class OneEarPlayerWindow(QMainWindow):
