@@ -11,7 +11,7 @@ One Ear Player creates a unique listening experience by rapidly alternating audi
 ### Desktop (Linux/Windows)
 - Cross-platform Python application with PyQt5 GUI
 - Supports MP3, WAV, OGG, FLAC
-- Configurable switching frequency (1-1000 Hz)
+- Configurable switching frequency (1-441000 Hz)
 - See [desktop/README.md](desktop/README.md) for details
 
 ### Android
@@ -22,7 +22,9 @@ One Ear Player creates a unique listening experience by rapidly alternating audi
 
 ## Features
 
-- **Configurable Frequency**: Adjust the channel switching rate from 1 Hz to 1000 Hz (default: 120 Hz)
+- **Configurable Frequency**: Adjust the channel switching rate from 1 Hz to 441000 Hz (default: 120 Hz)
+- **Pitch Effects**: High frequency switching creates interesting pitch effects from overlapping frequencies
+- **Inaudibility Control**: Increase frequency until pitch becomes inaudible for unique audio experiences
 - **Multiple Audio Formats**: Support for MP3, WAV, OGG, FLAC, and more
 - **Full Playback Controls**: Play, pause, stop, and seek functionality
 - **Volume Control**: Adjust playback volume

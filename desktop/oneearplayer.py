@@ -208,7 +208,7 @@ class OneEarPlayerWindow(QMainWindow):
         
         self.freq_spinbox = QSpinBox()
         self.freq_spinbox.setMinimum(1)
-        self.freq_spinbox.setMaximum(1000)
+        self.freq_spinbox.setMaximum(441000)
         self.freq_spinbox.setValue(120)
         self.freq_spinbox.valueChanged.connect(self.on_frequency_changed)
         freq_layout.addWidget(self.freq_spinbox)
