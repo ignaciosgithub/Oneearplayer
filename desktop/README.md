@@ -5,8 +5,10 @@ Cross-platform audio player that switches stereo output between left and right c
 ## Features
 
 - Play audio files (MP3, WAV, OGG, FLAC)
-- Switch between left and right channels at configurable frequency (1-1000 Hz)
+- Switch between left and right channels at configurable frequency (1-441000 Hz)
 - Default switching frequency: 120 Hz
+- High frequency switching creates pitch effects from overlapping frequencies
+- Increase frequency until pitch becomes inaudible for unique audio experiences
 - Volume control
 - Playback controls (play, pause, stop)
 - Seek functionality
