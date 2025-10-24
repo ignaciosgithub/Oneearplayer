@@ -8,7 +8,6 @@ import sys
 import os
 import threading
 import time
-import wave
 from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QSlider, 
@@ -31,21 +30,22 @@ class AudioPlayer(QObject):
         self.is_playing = False
         self.is_paused = False
         self.switch_frequency = 120
-        self.original_audio = None
         self.duration = 0
         self.position = 0
         self.switch_thread = None
         self.stop_switching = False
         self.current_channel = 0
+        self.sound = None
+        self.channel = None
+        self.base_volume = 0.7
         
     def load_file(self, filepath):
         try:
             self.stop()
             self.current_file = filepath
             
-            sound = pygame.mixer.Sound(filepath)
-            self.original_audio = pygame.sndarray.array(sound)
-            self.duration = int(sound.get_length() * 1000)
+            self.sound = pygame.mixer.Sound(filepath)
+            self.duration = int(self.sound.get_length() * 1000)
             self.duration_changed.emit(self.duration)
             
             return True
@@ -53,58 +53,47 @@ class AudioPlayer(QObject):
             print(f"Error loading file: {e}")
             return False
     
-    def create_channel_switched_audio(self, channel):
-        if self.original_audio is None:
-            return None
-        
-        audio_copy = self.original_audio.copy()
-        
-        if len(audio_copy.shape) == 2 and audio_copy.shape[1] == 2:
-            if channel == 0:
-                audio_copy[:, 1] = 0
-            else:
-                audio_copy[:, 0] = 0
-        
-        return pygame.sndarray.make_sound(audio_copy)
-    
     def switch_channels_thread(self):
         switch_interval = 1.0 / self.switch_frequency
         
         while not self.stop_switching and self.is_playing:
-            if not self.is_paused:
+            if not self.is_paused and self.channel:
                 self.current_channel = 1 - self.current_channel
                 
-                current_pos = pygame.mixer.music.get_pos()
-                if current_pos == -1:
-                    self.playback_finished.emit()
-                    break
-                
-                self.position = current_pos
-                self.position_changed.emit(current_pos)
+                if self.current_channel == 0:
+                    self.channel.set_volume(self.base_volume, 0.0)
+                else:
+                    self.channel.set_volume(0.0, self.base_volume)
             
             time.sleep(switch_interval)
     
     def play(self):
-        if self.current_file is None:
+        if self.sound is None:
             return
         
-        if self.is_paused:
-            pygame.mixer.music.unpause()
+        if self.is_paused and self.channel:
+            self.channel.unpause()
             self.is_paused = False
             self.is_playing = True
-        else:
-            pygame.mixer.music.load(self.current_file)
-            pygame.mixer.music.play()
-            self.is_playing = True
-            self.is_paused = False
             
-            self.stop_switching = False
-            self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
-            self.switch_thread.start()
+            if not self.switch_thread or not self.switch_thread.is_alive():
+                self.stop_switching = False
+                self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
+                self.switch_thread.start()
+        else:
+            self.channel = self.sound.play()
+            if self.channel:
+                self.channel.set_volume(self.base_volume, 0.0)
+                self.is_playing = True
+                self.is_paused = False
+                
+                self.stop_switching = False
+                self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
+                self.switch_thread.start()
     
     def pause(self):
-        if self.is_playing and not self.is_paused:
-            pygame.mixer.music.pause()
+        if self.is_playing and not self.is_paused and self.channel:
+            self.channel.pause()
             self.is_paused = True
     
     def stop(self):
@@ -112,34 +101,44 @@ class AudioPlayer(QObject):
         if self.switch_thread:
             self.switch_thread.join(timeout=1)
         
-        pygame.mixer.music.stop()
+        if self.channel:
+            self.channel.stop()
+        
         self.is_playing = False
         self.is_paused = False
         self.position = 0
         self.position_changed.emit(0)
     
     def set_position(self, position_ms):
-        if self.current_file:
+        if self.sound:
             was_playing = self.is_playing and not self.is_paused
             self.stop()
             
-            pygame.mixer.music.load(self.current_file)
-            pygame.mixer.music.play(start=position_ms / 1000.0)
+            position_sec = position_ms / 1000.0
+            self.channel = self.sound.play(maxtime=int((self.duration - position_ms)))
             
-            if not was_playing:
-                pygame.mixer.music.pause()
-                self.is_paused = True
-            
-            self.is_playing = True
-            self.position = position_ms
-            
-            if was_playing:
-                self.stop_switching = False
-                self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
-                self.switch_thread.start()
+            if self.channel:
+                self.channel.set_volume(self.base_volume, 0.0)
+                
+                if not was_playing:
+                    self.channel.pause()
+                    self.is_paused = True
+                
+                self.is_playing = True
+                self.position = position_ms
+                
+                if was_playing:
+                    self.stop_switching = False
+                    self.switch_thread = threading.Thread(target=self.switch_channels_thread, daemon=True)
+                    self.switch_thread.start()
     
     def set_volume(self, volume):
-        pygame.mixer.music.set_volume(volume / 100.0)
+        self.base_volume = volume / 100.0
+        if self.channel and self.is_playing:
+            if self.current_channel == 0:
+                self.channel.set_volume(self.base_volume, 0.0)
+            else:
+                self.channel.set_volume(0.0, self.base_volume)
     
     def set_switch_frequency(self, frequency):
         self.switch_frequency = frequency
@@ -155,6 +154,9 @@ class OneEarPlayerWindow(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_position)
         self.update_timer.start(100)
+        
+        self.playback_start_time = 0
+        self.playback_offset = 0
     
     def init_ui(self):
         self.setWindowTitle('One Ear Player')
@@ -275,15 +277,24 @@ class OneEarPlayerWindow(QMainWindow):
                 self.play_button.setEnabled(True)
                 self.pause_button.setEnabled(True)
                 self.stop_button.setEnabled(True)
+                self.playback_start_time = 0
+                self.playback_offset = 0
     
     def play(self):
+        if not self.player.is_playing or self.player.is_paused:
+            self.playback_start_time = time.time()
         self.player.play()
     
     def pause(self):
+        if self.player.is_playing and not self.player.is_paused:
+            elapsed = (time.time() - self.playback_start_time) * 1000
+            self.playback_offset += elapsed
         self.player.pause()
     
     def stop(self):
         self.player.stop()
+        self.playback_start_time = 0
+        self.playback_offset = 0
     
     def on_volume_changed(self, value):
         self.player.set_volume(value)
@@ -312,13 +323,18 @@ class OneEarPlayerWindow(QMainWindow):
         if self.player.duration > 0:
             position = int((self.position_slider.value() / 1000.0) * self.player.duration)
             self.player.set_position(position)
+            self.playback_offset = position
+            self.playback_start_time = time.time()
     
     def update_position(self):
         if self.player.is_playing and not self.player.is_paused:
-            pos = pygame.mixer.music.get_pos()
-            if pos != -1:
-                self.player.position = pos
-                self.on_position_changed(pos)
+            elapsed = (time.time() - self.playback_start_time) * 1000
+            current_pos = int(self.playback_offset + elapsed)
+            
+            if current_pos >= self.player.duration:
+                self.stop()
+            else:
+                self.on_position_changed(current_pos)
     
     def format_time(self, milliseconds):
         seconds = milliseconds // 1000
