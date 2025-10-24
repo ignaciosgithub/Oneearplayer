@@ -66,7 +66,13 @@ class AudioPlayer(QObject):
             sample_rate = 44100
             samples_per_switch = max(1, int(sample_rate / self.switch_frequency))
             
-            crossfade_samples = max(1, min(samples_per_switch // 20, 100))
+            if samples_per_switch < 2:
+                self.processed_sound = self.original_sound
+                return
+            
+            crossfade_samples = min(samples_per_switch // 20, 100)
+            if crossfade_samples < 1:
+                crossfade_samples = 0
             
             processed_audio = audio_array.copy().astype(np.float32)
             
@@ -77,21 +83,24 @@ class AudioPlayer(QObject):
                 end_idx = min(i + samples_per_switch, num_samples)
                 chunk_len = end_idx - i
                 
+                if chunk_len < 1:
+                    break
+                
                 if current_channel == 0:
                     processed_audio[i:end_idx, 1] = 0
                     
-                    if i > 0 and crossfade_samples > 0 and chunk_len > 0:
+                    if i > 0 and crossfade_samples > 0:
                         fade_end = min(i + crossfade_samples, end_idx)
-                        fade_len = max(1, fade_end - i)
+                        fade_len = fade_end - i
                         if fade_len > 1:
                             fade_in = np.linspace(0, 1, fade_len)
                             processed_audio[i:fade_end, 0] *= fade_in
                 else:
                     processed_audio[i:end_idx, 0] = 0
                     
-                    if i > 0 and crossfade_samples > 0 and chunk_len > 0:
+                    if i > 0 and crossfade_samples > 0:
                         fade_end = min(i + crossfade_samples, end_idx)
-                        fade_len = max(1, fade_end - i)
+                        fade_len = fade_end - i
                         if fade_len > 1:
                             fade_in = np.linspace(0, 1, fade_len)
                             processed_audio[i:fade_end, 1] *= fade_in
